@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -5,6 +6,10 @@ from torch.nn import functional as F
 try:
     from torch.nn.attention.flex_attention import flex_attention as _flex_attention
     HAS_FLEX_ATTENTION = True
+    # Called eagerly, flex_attention warns and falls back to an unfused dense implementation (slow, and it materialises the
+    # full score matrix). Compile it. Set NCM_COMPILE_FLEX=0 to keep the eager path, for example when debugging.
+    if os.environ.get("NCM_COMPILE_FLEX", "1") == "1":
+        _flex_attention = torch.compile(_flex_attention, dynamic=False)
 except ImportError:
     _flex_attention = None
     HAS_FLEX_ATTENTION = False

@@ -727,8 +727,12 @@ class MultiscaleResidualVectorQuantizer(VectorQuantizerBaseClass):
 
 
 if __name__ == "__main__":
+    from types import SimpleNamespace
+
     vq = MultiscaleResidualVectorQuantizer(
-        vqvae_vocab_size=512, embed_dim=256, levels=[16, 32, 64]
+        vqvae_vocab_size=[512, 512, 512],  # one codebook size per level
+        embed_dim=256,
+        levels=SimpleNamespace(use_manual_levels=True, manual_levels=[16, 32, 64]),
     )
     z = torch.randn(1, 64, 256)
     idx = vq.z_to_idx(z)

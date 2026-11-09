@@ -309,15 +309,18 @@ class NextConceptTransformer(Transformer):
         print("NCP Transformer, Total parameter count: %.2fM" % (total_params/1e6,))
         print("NCP Transformer, Non embedding parameter count: %.2fM" % (non_embd_params/1e6,))
         
-    def _get_flex_block_mask(self, device):
+    def _get_flex_block_mask(self, device, prefix_pad_mask=None):
+        """Block mask for flex attention. With prefix_pad_mask (B, P, True = padding) the mask is per batch element and not cached, so that
+        padded prefix slots are never attended to, matching the dense path in _run_stack."""
         key = str(device)
-        if key not in self._flex_block_masks:
+        if prefix_pad_mask is not None or key not in self._flex_block_masks:
             from torch.nn.attention.flex_attention import create_block_mask
             P = self.prefix_len
             lvl = self.flex_lvl_full.to(device)
             # prefix + target positions, as built in __init__ (the target is L positions with query_level0, else L - levels[0])
             S = lvl.shape[0]
             block_causal = getattr(self.config, 'attn_pattern', 'block_diagonal') == 'block_causal'
+            pad = prefix_pad_mask.to(device) if prefix_pad_mask is not None else None
 
             def mask_mod(b, h, q_idx, kv_idx):
                 qc = torch.clamp(q_idx, max=S - 1)
@@ -328,13 +331,19 @@ class NextConceptTransformer(Transformer):
                     same = (lvl[kc] <= lvl[qc]) & (lvl[kc] >= 0)
                 else:
                     same = (lvl[qc] == lvl[kc]) & (lvl[kc] >= 0)
-                return torch.where(q_pref, kv_pref, kv_pref | same)
+                allowed = torch.where(q_pref, kv_pref, kv_pref | same)
+                if pad is not None:
+                    allowed = allowed & ~(kv_pref & pad[b, torch.clamp(kv_idx, max=P - 1)])
+                return allowed
 
             block_size = int(getattr(self.config, 'flex_block_size', 128))
-            self._flex_block_masks[key] = create_block_mask(
-                mask_mod, B=None, H=None, Q_LEN=S, KV_LEN=S, device=device,
+            mask = create_block_mask(
+                mask_mod, B=(pad.shape[0] if pad is not None else None), H=None, Q_LEN=S, KV_LEN=S, device=device,
                 BLOCK_SIZE=block_size,
             )
+            if pad is not None:
+                return mask
+            self._flex_block_masks[key] = mask
         return self._flex_block_masks[key]
 
     def _apply_post_upsample_convs_multi(self, x_target):
@@ -445,7 +454,7 @@ class NextConceptTransformer(Transformer):
 
         rope = (self.rope_cos, self.rope_sin) if self.use_rope else None
         if self.use_flex_attention:
-            block_mask = self._get_flex_block_mask(x.device)
+            block_mask = self._get_flex_block_mask(x.device, prefix_pad_mask)
             for block in self.transformer.blocks:
                 x = block(x, rope_cos_sin=rope, block_mask=block_mask)
         else:

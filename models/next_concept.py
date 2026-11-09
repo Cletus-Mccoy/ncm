@@ -314,8 +314,9 @@ class NextConceptTransformer(Transformer):
         if key not in self._flex_block_masks:
             from torch.nn.attention.flex_attention import create_block_mask
             P = self.prefix_len
-            S = P + (self.L - self.levels[0])
             lvl = self.flex_lvl_full.to(device)
+            # prefix + target positions, as built in __init__ (the target is L positions with query_level0, else L - levels[0])
+            S = lvl.shape[0]
             block_causal = getattr(self.config, 'attn_pattern', 'block_diagonal') == 'block_causal'
 
             def mask_mod(b, h, q_idx, kv_idx):
